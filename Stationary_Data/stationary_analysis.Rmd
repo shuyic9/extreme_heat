@@ -1,0 +1,165 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+### Data Cleaning and Aggregation Process
+
+1. **Combining Observations**: Grouping observations within the same hour by station.
+2. **Output Observation Count**: Count the number of observations by station.
+3. **Station Filtering**: Remove stations with fewer than 7008 (80%) of the data points.
+
+**After Cleaning:**
+
+- **LA_temp_2023_cleaned.csv**
+  - Original stations: 13
+  - Stations retained: 10
+  
+- **LA_temp_2022_cleaned.csv**
+  - Original stations: 13
+  - Stations retained: 10
+  
+- **LA_temp_2021_cleaned.csv**
+  - Original stations: 13
+  - Stations retained: 10
+
+- **LA_temp_2020_cleaned.csv**
+  - Original stations: 13
+  - Stations retained: 9
+
+**Question**: For daily temperature summaries, should we:
+   - Take the average of the maximum temperatures recorded across all stations?
+   - Or take the highest temperature recorded from any of the stations?
+
+```{r}
+library(dplyr)
+library(readr)
+library(lubridate)
+library(ggplot2)
+
+setwd("./Station_New")
+files <- list.files(pattern = "*_daily_max.csv")
+
+
+combined_data <- data.frame()
+for (file in files) {
+  print(paste("Reading:", file))
+  data <- read_csv(file)
+  data$DATE <- as.Date(data$DATE)
+  combined_data <- bind_rows(combined_data, data)
+}
+
+summer_data <- combined_data %>%
+  mutate(
+    year = year(DATE),
+    month = month(DATE)
+  ) %>%
+  filter(month %in% c(7, 8))
+
+
+summer_summary <- summer_data %>%
+  group_by(year) %>%
+  summarize(
+    avg_daily_station_max = round(mean(avg_station_max, na.rm = TRUE), 2),
+    avg_daily_overall_max = round(mean(overall_max, na.rm = TRUE), 2),
+    n_days = n()
+  ) %>%
+  arrange(desc(avg_daily_station_max))
+
+summer_summary
+
+```
+
+```{r}
+ggplot(summer_data, aes(x = factor(year), y = avg_station_max)) +
+  geom_boxplot(fill = "skyblue") +
+  labs(
+    title = "Distribution of Average Station Max by Year",
+    x = "Year",
+    y = "Average Station Max (°C)"
+  ) +
+  theme_minimal()
+
+summer_data <- summer_data %>%
+  mutate(
+    day_of_year = yday(DATE) - yday(as.Date(paste0(year, "-07-01")))
+  )
+
+ggplot(summer_data, aes(x = day_of_year, y = avg_station_max, color = factor(year))) +
+  geom_line() +
+  labs(
+    title = "Average Station Max Across Summer Days by Year",
+    x = "Day of Summer",
+    y = "Average Station Max (°C)",
+    color = "Year"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+summer_data <- summer_data %>%
+  mutate(
+    is_heat_wave = avg_station_max > 30
+  )
+
+summer_data <- summer_data %>%
+  mutate(
+    heat_wave_group = cumsum(!is_heat_wave)
+  ) %>%
+  group_by(heat_wave_group) %>%
+  mutate(
+    heat_wave_id = ifelse(is_heat_wave, cur_group_id(), NA_integer_)
+  ) %>%
+  ungroup()
+
+
+heat_wave_data <- summer_data %>%
+  filter(is_heat_wave) %>%
+  arrange(heat_wave_id, DATE)
+
+
+heat_wave_summary <- heat_wave_data %>%
+  group_by(heat_wave_id, year) %>%
+  summarize(
+    start_date = min(DATE),
+    end_date = max(DATE),
+    duration_days = as.integer(end_date - start_date) + 1,
+    .groups = 'drop'
+  ) %>%
+  filter(duration_days >= 2) %>%  # **Exclude** heat waves lasting only one day
+  arrange(year, desc(duration_days)) %>%
+  ungroup()
+
+heat_wave_summary
+
+heat_wave_count <- heat_wave_summary %>%
+  group_by(year) %>%
+  summarize(
+    total_heat_waves = n(),
+    average_duration = round(mean(duration_days), 2),
+    max_duration = max(duration_days),
+    .groups = 'drop'
+  ) %>%
+  arrange(year)
+
+heat_wave_days_per_year <- heat_wave_summary %>%
+  group_by(year) %>%
+  summarize(
+    total_heat_wave_days = sum(duration_days),
+    .groups = 'drop'
+  ) %>%
+  arrange(year)
+
+
+ggplot(heat_wave_days_per_year, aes(x = factor(year), y = total_heat_wave_days, fill = factor(year))) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Total Heat Wave Days per Year",
+    x = "Year",
+    y = "Total Heat Wave Days",
+    fill = "Year"
+  ) +
+  theme_minimal()
+```
+
